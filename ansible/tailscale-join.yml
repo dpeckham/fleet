@@ -1,0 +1,33 @@
+# Joins the tailnet with a one-time key. The key is on disk only while this runs.
+- name: Join the tailnet
+  hosts: all
+  gather_facts: true
+  vars:
+    tailscale_cli: >-
+      {{ '/Applications/Tailscale.app/Contents/MacOS/Tailscale'
+         if ansible_facts['system'] == 'Darwin' else 'tailscale' }}
+  tasks:
+    - name: Join
+      become: true
+      block:
+        - name: Write the key to a private file
+          ansible.builtin.copy:
+            content: "{{ tailscale_auth_key }}"
+            dest: /tmp/fleet-tailscale-key
+            mode: "0600"
+            owner: root
+          no_log: true
+        - name: Bring Tailscale up
+          ansible.builtin.command:
+            argv:
+              - "{{ tailscale_cli }}"
+              - up
+              - --auth-key=file:/tmp/fleet-tailscale-key
+              - --advertise-tags=tag:fleet-host
+              - "--hostname={{ inventory_hostname }}"
+          changed_when: true
+      always:
+        - name: Remove the key file
+          ansible.builtin.file:
+            path: /tmp/fleet-tailscale-key
+            state: absent

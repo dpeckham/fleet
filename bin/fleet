@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Resolves symlinks, so this can be linked from anywhere on PATH.
+set -euo pipefail
+source=${BASH_SOURCE[0]}
+while [ -L "$source" ]; do
+  dir=$(cd -P "$(dirname "$source")" && pwd)
+  source=$(readlink "$source")
+  case $source in /*) ;; *) source=$dir/$source ;; esac
+done
+root=$(cd -P "$(dirname "$source")/.." && pwd)
+if [ ! -x "$root/.venv/bin/fleet" ]; then
+  echo "fleet: not set up; run 'mise trust && mise run setup' in $root" >&2
+  exit 1
+fi
+FLEET_ROOT=$root exec "$root/.venv/bin/fleet" "$@"

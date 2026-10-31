@@ -1,0 +1,116 @@
+# Tasks that make sure the instance exists and is running.
+# instance_missing says what to do when it doesn't exist: create, fail or skip.
+- name: Read Incus instance state
+  when: backend == 'incus'
+  ansible.builtin.command: incus list --format json -- "^{{ env_name }}$"
+  register: incus_state
+  changed_when: false
+
+- name: Handle a missing container
+  when: backend == 'incus' and (incus_state.stdout | from_json | length) == 0 and instance_missing != 'create'
+  block:
+    - name: Nothing to do
+      when: instance_missing == 'skip'
+      ansible.builtin.meta: end_host
+    - name: Refuse to continue
+      ansible.builtin.fail:
+        msg: "{{ env_name }} does not exist on {{ inventory_hostname }}; run 'fleet provision' first"
+
+- name: Create the container
+  when: backend == 'incus' and (incus_state.stdout | from_json | length) == 0
+  ansible.builtin.command:
+    argv:
+      - incus
+      - launch
+      - "images:{{ image | replace('-', '/') }}"
+      - "{{ env_name }}"
+      - -c
+      - boot.autostart=true
+      - -c
+      - security.nesting=true
+  changed_when: true
+
+- name: Start the container
+  when: >-
+    backend == 'incus' and (incus_state.stdout | from_json | length) > 0
+    and (incus_state.stdout | from_json | first).status != 'Running'
+  ansible.builtin.command: incus start {{ env_name }}
+  changed_when: true
+
+- name: Find limactl
+  when: backend == 'lima'
+  ansible.builtin.shell: |
+    PATH=$HOME/.local/bin:$HOME/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:$PATH
+    command -v limactl
+  register: limactl_path
+  changed_when: false
+
+- name: Read Lima instance state
+  when: backend == 'lima'
+  ansible.builtin.command:
+    argv: ["{{ limactl_path.stdout }}", list, --json]
+  register: lima_state
+  changed_when: false
+
+- name: Note the Lima status
+  when: backend == 'lima'
+  ansible.builtin.set_fact:
+    lima_status: >-
+      {{ (lima_state.stdout_lines | map('from_json') | selectattr('name', 'equalto', env_name)
+          | map(attribute='status') | list + ['Absent']) | first }}
+
+- name: Handle a missing VM
+  when: backend == 'lima' and lima_status == 'Absent' and instance_missing != 'create'
+  block:
+    - name: Nothing to do
+      when: instance_missing == 'skip'
+      ansible.builtin.meta: end_host
+    - name: Refuse to continue
+      ansible.builtin.fail:
+        msg: "{{ env_name }} does not exist on {{ inventory_hostname }}; run 'fleet provision' first"
+
+# --plain removes host mounts, so agents cannot read the host's files.
+- name: Create the VM
+  when: backend == 'lima' and lima_status == 'Absent'
+  ansible.builtin.command:
+    argv:
+      - "{{ limactl_path.stdout }}"
+      - --tty=false
+      - create
+      - "--name={{ env_name }}"
+      - --plain
+      - "template:{{ image }}"
+  changed_when: true
+
+- name: Start the VM
+  when: backend == 'lima' and lima_status != 'Running'
+  ansible.builtin.command:
+    argv: ["{{ limactl_path.stdout }}", --tty=false, start, "{{ env_name }}"]
+  changed_when: true
+
+- name: Check VM autostart
+  when: backend == 'lima' and lima_autostart != 'none'
+  ansible.builtin.stat:
+    path: >-
+      {{ '/Library/LaunchDaemons/io.lima-vm.daemon.' ~ env_name ~ '.plist'
+         if lima_autostart == 'boot'
+         else ansible_facts['env']['HOME'] ~ '/Library/LaunchAgents/io.lima-vm.autostart.' ~ env_name ~ '.plist' }}
+  register: lima_autostart_file
+
+- name: Enable VM autostart
+  when: backend == 'lima' and lima_autostart != 'none' and not lima_autostart_file.stat.exists
+  become: "{{ lima_autostart == 'boot' }}"
+  ansible.builtin.command:
+    argv:
+      - "{{ limactl_path.stdout }}"
+      - autostart
+      - enable
+      - "--condition={{ lima_autostart }}"
+      - "{{ env_name }}"
+  changed_when: true
+
+- name: Set the command prefix for the environment
+  ansible.builtin.set_fact:
+    env_prefix: >-
+      {{ ['incus', 'exec', env_name, '--'] if backend == 'incus'
+         else [limactl_path.stdout, 'shell', '--workdir', '/', env_name, 'sudo', '-n'] }}

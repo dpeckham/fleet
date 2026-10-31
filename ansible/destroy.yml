@@ -1,0 +1,23 @@
+- name: Destroy the environment
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Delete the container
+      when: backend == 'incus'
+      ansible.builtin.shell: |
+        if [ "$(incus list --format csv --columns n -- '^{{ env_name }}$')" = "{{ env_name }}" ]; then
+          incus delete --force {{ env_name | quote }}
+          echo FLEET_CHANGED
+        fi
+      register: destroyed
+      changed_when: "'FLEET_CHANGED' in destroyed.stdout"
+    - name: Delete the VM
+      when: backend == 'lima'
+      ansible.builtin.shell: |
+        PATH=$HOME/.local/bin:$HOME/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:$PATH
+        if limactl list --quiet | grep -qx {{ env_name | quote }}; then
+          limactl delete --force {{ env_name | quote }}
+          echo FLEET_CHANGED
+        fi
+      register: destroyed
+      changed_when: "'FLEET_CHANGED' in destroyed.stdout"

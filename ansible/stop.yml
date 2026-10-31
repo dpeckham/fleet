@@ -1,0 +1,21 @@
+- name: Stop the agents
+  hosts: all
+  gather_facts: true
+  vars:
+    image: "{{ default_image }}"
+    instance_missing: skip
+    stop_now: false
+  tasks:
+    - name: Ensure the instance is running
+      ansible.builtin.include_tasks: env-instance.yml
+    - name: Disable the service and stop the agents
+      ansible.builtin.command:
+        argv: "{{ env_prefix + ['bash', '-s'] }}"
+        stdin: |
+          FLEET_REPO_NAME={{ repo_name | quote }}
+          FLEET_STOP={{ repo_stop | quote }}
+          FLEET_STOP_NOW={{ repo_stop_now | quote }}
+          FLEET_NOW={{ stop_now | bool | ternary('1', '0') }}
+          {{ lookup('file', 'scripts/env-stop.sh') }}
+      register: stopped
+      changed_when: "'FLEET_CHANGED' in stopped.stdout"

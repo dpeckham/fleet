@@ -1,0 +1,19 @@
+#!/bin/bash
+# Stand-in for a repo's agents command: a detached worker that drains slowly when asked to stop.
+state=$HOME/fixture-state
+mkdir -p "$state"
+case ${1:-} in
+  stop)
+    touch "$state/drain"
+    if [ "${2:-}" = --now ]; then pkill -f fixture-worker || true; fi
+    ;;
+  *)
+    rm -f "$state/drain"
+    nohup bash -c 'exec -a fixture-worker bash -c "
+      echo started >>\"\$HOME/fixture-state/starts\"
+      env >\"\$HOME/fixture-state/env\"
+      until [ -e \"\$HOME/fixture-state/drain\" ]; do sleep 1; done
+      sleep 12
+      echo drained >>\"\$HOME/fixture-state/starts\""' >/dev/null 2>&1 &
+    ;;
+esac

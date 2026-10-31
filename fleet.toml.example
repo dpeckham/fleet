@@ -1,0 +1,23 @@
+# Copy to fleet.toml. Holds addresses and commands, never secrets.
+# `fleet host add` and `fleet provision` maintain most of this for you.
+
+[host.box1]
+backend = "incus"              # incus (Debian/Ubuntu hosts) or lima (macOS hosts)
+address = "box1.example.ts.net"
+user = "me"
+default_image = "debian-13"
+
+[host.mac1]
+backend = "lima"
+address = "mac1.example.ts.net"
+user = "me"
+lima_autostart = "boot"        # boot, login or none
+
+[repo.app]
+url = "https://github.com/me/app.git"
+# Optional overrides. These defaults suit a repo using mise and an `agents` command:
+# bootstrap = "mise trust && mise install"
+# start = "mise exec -- agents --conf=config/agents.conf"
+# stop = "mise exec -- agents stop"
+# stop_now = "mise exec -- agents stop --now"
+bootstrap = "scripts/setup.sh"

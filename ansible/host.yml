@@ -1,0 +1,110 @@
+# Converges a machine: installs its VM/container runtime and, on request, hardens SSH.
+- name: Prepare host
+  hosts: all
+  gather_facts: true
+  vars:
+    harden_ssh: false
+    install_tailscale: false
+  tasks:
+    - name: Check the operating system is supported by the backend
+      ansible.builtin.assert:
+        that: >-
+          (backend == 'incus' and ansible_facts['os_family'] == 'Debian') or
+          (backend == 'lima' and ansible_facts['system'] == 'Darwin')
+        fail_msg: "backend {{ backend }} is not supported on {{ ansible_facts['system'] }}/{{ ansible_facts['os_family'] }}"
+
+    - name: Install Incus
+      when: backend == 'incus'
+      become: true
+      ansible.builtin.apt:
+        # Incus's bridge needs these and doesn't always pull them in.
+        name: [incus, dnsmasq-base, nftables]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Let the login user manage Incus
+      when: backend == 'incus'
+      become: true
+      ansible.builtin.user:
+        name: "{{ ansible_facts['user_id'] }}"
+        groups: incus-admin
+        append: true
+      register: incus_group
+
+    - name: Pick up the new group
+      ansible.builtin.meta: reset_connection
+
+    - name: Check whether Incus is initialized
+      when: backend == 'incus'
+      ansible.builtin.command: incus profile device get default root pool
+      register: incus_pool
+      changed_when: false
+      failed_when: false
+
+    - name: Initialize Incus with defaults
+      when: backend == 'incus' and incus_pool.rc != 0
+      ansible.builtin.command: incus admin init --minimal
+      changed_when: true
+
+    - name: Find limactl
+      when: backend == 'lima'
+      ansible.builtin.shell: |
+        PATH=$HOME/.local/bin:$HOME/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:$PATH
+        command -v limactl
+      register: limactl_found
+      changed_when: false
+      failed_when: limactl_found.rc != 0
+      # Lima is not installed for you on macOS, because that needs a choice of tool manager.
+
+    - name: Install Tailscale on Debian or Ubuntu
+      when: install_tailscale and ansible_facts['os_family'] == 'Debian'
+      become: true
+      block:
+        - name: Add the Tailscale signing key
+          ansible.builtin.get_url:
+            url: "https://pkgs.tailscale.com/stable/{{ ansible_facts['distribution'] | lower }}/{{ ansible_facts['distribution_release'] }}.noarmor.gpg"
+            dest: /usr/share/keyrings/tailscale-archive-keyring.gpg
+            mode: "0644"
+        - name: Add the Tailscale package source
+          ansible.builtin.copy:
+            content: >
+              deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg]
+              https://pkgs.tailscale.com/stable/{{ ansible_facts['distribution'] | lower }}
+              {{ ansible_facts['distribution_release'] }} main
+            dest: /etc/apt/sources.list.d/tailscale.list
+            mode: "0644"
+          register: tailscale_source
+        - name: Install the package
+          ansible.builtin.apt:
+            name: tailscale
+            state: present
+            update_cache: "{{ tailscale_source is changed }}"
+
+    - name: Check Tailscale is installed on macOS
+      when: install_tailscale and ansible_facts['system'] == 'Darwin'
+      ansible.builtin.stat:
+        path: /Applications/Tailscale.app
+      register: tailscale_app
+      failed_when: not tailscale_app.stat.exists
+
+    # Key login was verified before this playbook started, so this cannot lock you out.
+    - name: Turn off SSH password login
+      when: harden_ssh
+      become: true
+      ansible.builtin.copy:
+        content: |
+          # Managed by fleet.
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+        dest: /etc/ssh/sshd_config.d/10-fleet.conf
+        mode: "0644"
+        validate: /usr/sbin/sshd -t -f %s
+      register: sshd_conf
+
+    - name: Reload SSH on Linux
+      when: sshd_conf is changed and ansible_facts['system'] == 'Linux'
+      become: true
+      ansible.builtin.service:
+        name: ssh
+        state: reloaded

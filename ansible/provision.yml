@@ -1,0 +1,53 @@
+- name: Provision the environment
+  hosts: all
+  gather_facts: true
+  vars:
+    image: "{{ default_image }}"
+    instance_missing: create
+    secrets_b64: ""
+  tasks:
+    - name: Ensure the instance is running
+      ansible.builtin.include_tasks: env-instance.yml
+
+    - name: Wait for the instance to be ready
+      ansible.builtin.command:
+        argv: "{{ env_prefix + ['true'] }}"
+      register: instance_ready
+      until: instance_ready.rc == 0
+      retries: 30
+      delay: 2
+      changed_when: false
+
+    - name: Converge the environment
+      ansible.builtin.command:
+        argv: "{{ env_prefix + ['bash', '-s'] }}"
+        stdin: |
+          FLEET_REPO_NAME={{ repo_name | quote }}
+          FLEET_REPO_URL={{ repo_url | quote }}
+          FLEET_BOOTSTRAP={{ repo_bootstrap | quote }}
+          {{ lookup('file', 'scripts/env-provision.sh') }}
+      register: converge
+      changed_when: "'FLEET_CHANGED' in converge.stdout"
+
+    # Separate and silenced so that a failure can never print the secrets.
+    - name: Install secrets
+      when: secrets_b64 | length > 0
+      no_log: true
+      ansible.builtin.command:
+        argv: "{{ env_prefix + ['bash', '-s'] }}"
+        stdin: |
+          FLEET_SECRETS_B64={{ secrets_b64 | quote }}
+          {{ lookup('file', 'scripts/env-secrets.sh') }}
+      register: secrets
+      changed_when: "'FLEET_CHANGED' in secrets.stdout"
+
+    - name: Check out and bootstrap the repo
+      ansible.builtin.command:
+        argv: "{{ env_prefix + ['bash', '-s'] }}"
+        stdin: |
+          FLEET_REPO_NAME={{ repo_name | quote }}
+          FLEET_REPO_URL={{ repo_url | quote }}
+          FLEET_BOOTSTRAP={{ repo_bootstrap | quote }}
+          {{ lookup('file', 'scripts/env-checkout.sh') }}
+      register: checkout
+      changed_when: "'FLEET_CHANGED' in checkout.stdout"

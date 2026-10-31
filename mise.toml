@@ -1,0 +1,21 @@
+# Laptop toolchain for fleet. Run `mise trust && mise run setup` once per clone.
+[tools]
+python = "3.13"
+uv = "0.13.6"
+# Used only by the end-to-end tests, which run a throwaway VM as a fake host.
+lima = "2.2.1"
+
+[env]
+_.path = ["bin"]
+
+[tasks.setup]
+description = "Create .venv with fleet and its pinned dependencies"
+run = "uv sync --frozen"
+
+[tasks.test]
+description = "Unit and shell-completion tests"
+run = "uv run pytest -q tests"
+
+[tasks.e2e]
+description = "End-to-end test in a throwaway Lima VM (creates and deletes VMs)"
+run = "tests/e2e.sh"
